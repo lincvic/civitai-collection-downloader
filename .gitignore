@@ -22,3 +22,10 @@ npm-debug.log*
 
 # Build artifacts
 *.zip
+*.crx
+build/
+dist/
+
+# Private key (NEVER commit this!)
+key.pem
+*.pem
