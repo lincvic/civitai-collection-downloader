@@ -86,6 +86,15 @@
           <span class="input-prefix" id="pathPrefix">Downloads/Civitai/</span>
           <input type="text" id="folderName" placeholder="collection-name" class="folder-input">
         </div>
+
+        <label class="toggle-option">
+          <input type="checkbox" id="skipExisting" checked>
+          <span class="toggle-switch"></span>
+          <div class="toggle-content">
+            <span class="toggle-title">Skip existing files</span>
+            <span class="toggle-desc">Don't re-download files that already exist</span>
+          </div>
+        </label>
       </div>
 
       <div class="source-tab-hint">
@@ -134,6 +143,10 @@
           <div class="progress-stat">
             <span class="stat-icon completed">✅</span>
             <span id="completedCount">0</span> completed
+          </div>
+          <div class="progress-stat">
+            <span class="stat-icon skipped">⏭️</span>
+            <span id="skippedCount">0</span> skipped
           </div>
           <div class="progress-stat">
             <span class="stat-icon failed">❌</span>

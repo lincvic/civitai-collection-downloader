@@ -10,6 +10,7 @@ let downloadProgress = {
   queued: 0,
   downloading: 0,
   completed: 0,
+  skipped: 0,
   failed: 0,
   total: 0,
   failedItems: []
@@ -43,8 +44,12 @@ const elements = {
   queuedCount: document.getElementById('queuedCount'),
   downloadingCount: document.getElementById('downloadingCount'),
   completedCount: document.getElementById('completedCount'),
+  skippedCount: document.getElementById('skippedCount'),
   failedCount: document.getElementById('failedCount'),
   currentFile: document.getElementById('currentFile'),
+  
+  // Options
+  skipExisting: document.getElementById('skipExisting'),
   
   // Completed
   totalDownloaded: document.getElementById('totalDownloaded'),
@@ -246,12 +251,14 @@ async function startDownload() {
   
   const downloadMode = document.querySelector('input[name="downloadMode"]:checked').value;
   const folderName = elements.folderName.value.trim() || 'civitai-download';
+  const skipExisting = elements.skipExisting?.checked ?? true;
   
   // Reset progress
   downloadProgress = {
     queued: 0,
     downloading: 0,
     completed: 0,
+    skipped: 0,
     failed: 0,
     total: 0,
     failedItems: []
@@ -279,6 +286,7 @@ async function startDownload() {
       collectionName: collectionData.name,
       downloadMode: downloadMode,
       folderName: folderName,
+      skipExisting: skipExisting,
       sourceTabId: sourceTab.tabId
     });
   } catch (error) {
@@ -368,14 +376,18 @@ function handleMessage(message) {
 }
 
 function updateProgressUI() {
-  const { queued, downloading, completed, failed, total } = downloadProgress;
-  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const { queued, downloading, completed, skipped, failed, total } = downloadProgress;
+  const done = completed + skipped;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
   
   elements.progressPercent.textContent = `${percent}%`;
   elements.progressFill.style.width = `${percent}%`;
   elements.queuedCount.textContent = queued;
   elements.downloadingCount.textContent = downloading;
   elements.completedCount.textContent = completed;
+  if (elements.skippedCount) {
+    elements.skippedCount.textContent = skipped || 0;
+  }
   elements.failedCount.textContent = failed;
 }
 

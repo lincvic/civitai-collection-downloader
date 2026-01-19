@@ -8,16 +8,19 @@ class DownloadManager {
     this.queue = [];
     this.active = [];
     this.completed = [];
+    this.skipped = [];
     this.failed = [];
     this.maxConcurrent = 3;
     this.downloadDelay = 200; // ms between downloads
     this.retryAttempts = 3;
     this.isPaused = false;
     this.isCancelled = false;
+    this.skipExisting = true;
     this.onProgress = null;
     this.onComplete = null;
     this.onError = null;
     this.onFileStart = null;
+    this.onFileSkipped = null;
     this.basePath = 'Civitai';
   }
 
@@ -29,15 +32,18 @@ class DownloadManager {
     this.downloadDelay = options.downloadDelay || 200;
     this.retryAttempts = options.retryAttempts || 3;
     this.basePath = options.basePath || 'Civitai';
+    this.skipExisting = options.skipExisting !== false; // Default to true
     this.onProgress = options.onProgress || null;
     this.onComplete = options.onComplete || null;
     this.onError = options.onError || null;
     this.onFileStart = options.onFileStart || null;
+    this.onFileSkipped = options.onFileSkipped || null;
     
     // Reset state
     this.queue = [];
     this.active = [];
     this.completed = [];
+    this.skipped = [];
     this.failed = [];
     this.isPaused = false;
     this.isCancelled = false;
@@ -105,10 +111,102 @@ class DownloadManager {
   }
 
   /**
+   * Get base filename without extension
+   */
+  getBaseName(filename) {
+    return filename.replace(/\.[^.]+$/, '');
+  }
+
+  /**
+   * Check if a file already exists in downloads (and still exists on disk)
+   */
+  async checkFileExists(filename) {
+    const baseName = this.getBaseName(filename);
+    
+    return new Promise((resolve) => {
+      // Search for previous downloads - search more broadly first
+      chrome.downloads.search({ 
+        state: 'complete',
+        limit: 1000  // Get recent downloads
+      }, (downloads) => {
+        if (chrome.runtime.lastError) {
+          console.log('Error searching downloads:', chrome.runtime.lastError);
+          resolve(false);
+          return;
+        }
+        
+        // Check if any completed download has the same base filename AND still exists
+        const matchingDownload = downloads.find(d => {
+          // Skip if file no longer exists on disk
+          if (d.exists === false) return false;
+          
+          // Get just the filename from the full path
+          const downloadFilename = d.filename.split(/[/\\]/).pop();
+          
+          // Remove Chrome's uniquify suffix like " (1)", " (2)" etc for comparison
+          const normalizedDownloadFilename = downloadFilename.replace(/\s*\(\d+\)(\.[^.]+)$/, '$1');
+          
+          // Get base names (without extension) for comparison
+          const downloadBaseName = this.getBaseName(normalizedDownloadFilename);
+          
+          // Check for exact match
+          if (downloadFilename === filename || normalizedDownloadFilename === filename) {
+            return true;
+          }
+          
+          // Check for same base name (different extension like .jpeg vs .webp)
+          if (downloadBaseName === baseName) {
+            return true;
+          }
+          
+          // Check if filename appears in path
+          if (d.filename.endsWith('/' + filename) || d.filename.endsWith('\\' + filename)) {
+            return true;
+          }
+          
+          return false;
+        });
+        
+        const exists = !!matchingDownload;
+        
+        if (exists) {
+          console.log(`File "${filename}" (base: ${baseName}) exists at: ${matchingDownload.filename}`);
+        } else {
+          console.log(`File "${filename}" (base: ${baseName}) not found in downloads (checked ${downloads.length} items)`);
+        }
+        
+        resolve(exists);
+      });
+    });
+  }
+
+  /**
    * Process a single download item
    */
   async processItem(item) {
     try {
+      // Check if file already exists (skip if enabled)
+      if (this.skipExisting) {
+        const exists = await this.checkFileExists(item.filename);
+        if (exists) {
+          console.log(`Skipping existing file: ${item.filename}`);
+          item.status = 'skipped';
+          this.skipped.push(item);
+          
+          if (this.onFileSkipped) {
+            this.onFileSkipped(item.filename);
+          }
+          
+          // Remove from active and emit progress
+          const index = this.active.findIndex(i => i.id === item.id);
+          if (index > -1) {
+            this.active.splice(index, 1);
+          }
+          this.emitProgress();
+          return;
+        }
+      }
+      
       item.status = 'downloading';
       this.emitProgress();
       
@@ -310,15 +408,17 @@ class DownloadManager {
    * Get current progress
    */
   getProgress() {
-    const total = this.queue.length + this.active.length + this.completed.length + this.failed.length;
+    const total = this.queue.length + this.active.length + this.completed.length + this.skipped.length + this.failed.length;
     
     return {
       total: total,
       queued: this.queue.length,
       downloading: this.active.length,
       completed: this.completed.length,
+      skipped: this.skipped.length,
       failed: this.failed.length,
       failedItems: this.failed.map(item => item.filename),
+      skippedItems: this.skipped.map(item => item.filename),
       isPaused: this.isPaused,
       isCancelled: this.isCancelled
     };
