@@ -1,0 +1,19 @@
+{
+  "name": "civitai-collection-downloader",
+  "version": "1.0.0",
+  "description": "Chrome extension to download all images from Civitai collections",
+  "private": true,
+  "scripts": {
+    "generate-icons": "node scripts/generate-icons.js"
+  },
+  "devDependencies": {
+    "canvas": "^2.11.2"
+  },
+  "keywords": [
+    "chrome-extension",
+    "civitai",
+    "downloader"
+  ],
+  "author": "",
+  "license": "MIT"
+}

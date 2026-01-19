@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=400">
+  <title>Civitai Collection Downloader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <rect width="24" height="24" rx="6" fill="url(#logoGrad)"/>
+          <path d="M12 5v9M12 14l-4-4M12 14l4-4M6 19h12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="logoGrad" x1="0" y1="0" x2="24" y2="24">
+              <stop stop-color="#3b82f6"/>
+              <stop offset="1" stop-color="#8b5cf6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <h1>Civitai Downloader</h1>
+      </div>
+    </header>
+
+    <!-- Not on Collection Page State -->
+    <div id="notOnCollection" class="state-panel hidden">
+      <div class="empty-state">
+        <svg class="empty-icon" viewBox="0 0 48 48" fill="none">
+          <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2" stroke-dasharray="4 4"/>
+          <path d="M24 16v8M24 28h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <p>Navigate to a Civitai collection page to start downloading</p>
+        <span class="hint">Example: civitai.com/collections/12345</span>
+      </div>
+    </div>
+
+    <!-- Collection Info State -->
+    <div id="collectionInfo" class="state-panel hidden">
+      <div class="collection-card">
+        <div class="collection-header">
+          <span class="collection-label">Collection</span>
+          <span id="collectionId" class="collection-id">#---</span>
+        </div>
+        <h2 id="collectionName" class="collection-name">Loading...</h2>
+        <div class="collection-stats">
+          <div class="stat">
+            <span class="stat-value" id="itemCount">-</span>
+            <span class="stat-label">Items</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="itemType">-</span>
+            <span class="stat-label">Type</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="options-section">
+        <label class="option-label">Download Mode</label>
+        <div class="radio-group">
+          <label class="radio-option">
+            <input type="radio" name="downloadMode" value="images" checked>
+            <span class="radio-custom"></span>
+            <div class="radio-content">
+              <span class="radio-title">Media Only</span>
+              <span class="radio-desc">Download images and videos directly</span>
+            </div>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="downloadMode" value="posts">
+            <span class="radio-custom"></span>
+            <div class="radio-content">
+              <span class="radio-title">Posts + All Media</span>
+              <span class="radio-desc">Extract all images/videos from posts</span>
+            </div>
+          </label>
+        </div>
+
+        <label class="option-label" for="folderName">Save Folder</label>
+        <div class="input-group">
+          <span class="input-prefix" id="pathPrefix">Downloads/Civitai/</span>
+          <input type="text" id="folderName" placeholder="collection-name" class="folder-input">
+        </div>
+      </div>
+
+      <button id="startDownload" class="btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M12 4v12M12 16l-5-5M12 16l5-5M5 20h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Start Download
+      </button>
+    </div>
+
+    <!-- Downloading State -->
+    <div id="downloadingState" class="state-panel hidden">
+      <div class="progress-section">
+        <div class="progress-header">
+          <span class="progress-title">Downloading...</span>
+          <span id="progressPercent" class="progress-percent">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <div class="progress-stats">
+          <div class="progress-stat">
+            <span class="stat-icon queued">⏳</span>
+            <span id="queuedCount">0</span> queued
+          </div>
+          <div class="progress-stat">
+            <span class="stat-icon downloading">⬇️</span>
+            <span id="downloadingCount">0</span> downloading
+          </div>
+          <div class="progress-stat">
+            <span class="stat-icon completed">✅</span>
+            <span id="completedCount">0</span> completed
+          </div>
+          <div class="progress-stat">
+            <span class="stat-icon failed">❌</span>
+            <span id="failedCount">0</span> failed
+          </div>
+        </div>
+      </div>
+
+      <div class="current-file">
+        <span class="current-label">Current:</span>
+        <span id="currentFile" class="current-name">-</span>
+      </div>
+
+      <div class="action-buttons">
+        <button id="pauseBtn" class="btn-secondary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+            <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>
+          </svg>
+          Pause
+        </button>
+        <button id="cancelBtn" class="btn-danger">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Cancel
+        </button>
+      </div>
+    </div>
+
+    <!-- Completed State -->
+    <div id="completedState" class="state-panel hidden">
+      <div class="completed-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <circle cx="24" cy="24" r="20" fill="#10b981" fill-opacity="0.15"/>
+          <circle cx="24" cy="24" r="20" stroke="#10b981" stroke-width="2"/>
+          <path d="M16 24l6 6 10-12" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h3 class="completed-title">Download Complete!</h3>
+      <p class="completed-stats">
+        <span id="totalDownloaded">0</span> files saved to 
+        <span id="savedFolder">Downloads/Civitai/</span>
+      </p>
+      <div id="failedList" class="failed-list hidden">
+        <span class="failed-title">Failed downloads:</span>
+        <ul id="failedItems"></ul>
+      </div>
+      <button id="newDownload" class="btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        New Download
+      </button>
+    </div>
+
+    <!-- Error State -->
+    <div id="errorState" class="state-panel hidden">
+      <div class="error-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <circle cx="24" cy="24" r="20" fill="#ef4444" fill-opacity="0.15"/>
+          <circle cx="24" cy="24" r="20" stroke="#ef4444" stroke-width="2"/>
+          <path d="M24 16v8M24 28h.01" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h3 class="error-title">Something went wrong</h3>
+      <p id="errorMessage" class="error-message">Unable to fetch collection data</p>
+      <button id="retryBtn" class="btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 3v5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Retry
+      </button>
+    </div>
+
+    <footer class="footer">
+      <span>v1.0.0</span>
+      <a href="https://github.com" target="_blank" rel="noopener">Help</a>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
