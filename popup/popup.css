@@ -1,4 +1,4 @@
-/* Civitai Collection Downloader - Popup Styles */
+/* Civitai Collection Downloader - Dashboard Styles */
 :root {
   --bg-primary: #0a0a0f;
   --bg-secondary: #12121a;
@@ -19,6 +19,7 @@
   --radius-lg: 14px;
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   --transition: 0.2s ease;
 }
 
@@ -32,16 +33,44 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
-  width: 380px;
-  min-height: 400px;
+  min-height: 100vh;
   overflow-x: hidden;
+}
+
+/* Background pattern */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(ellipse at 20% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.page-wrapper {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
 }
 
 .container {
   display: flex;
   flex-direction: column;
-  min-height: 400px;
-  padding: 16px;
+  width: 100%;
+  max-width: 460px;
+  min-height: 500px;
+  padding: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Header */
@@ -297,6 +326,31 @@ body {
   color: var(--text-muted);
 }
 
+/* Source Tab Hint */
+.source-tab-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+  color: var(--accent-blue);
+  font-size: 12px;
+}
+
+.source-tab-hint svg {
+  flex-shrink: 0;
+}
+
+/* Action Row */
+.action-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
 /* Buttons */
 .btn-primary {
   display: flex;
@@ -329,6 +383,15 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+}
+
+.btn-primary.btn-grow {
+  flex: 1;
+}
+
+.btn-small {
+  padding: 10px 14px;
+  font-size: 12px;
 }
 
 .btn-secondary {
@@ -575,16 +638,41 @@ body {
   border-top: 1px solid var(--border-color);
   font-size: 11px;
   color: var(--text-muted);
+  gap: 12px;
 }
 
 .footer a {
   color: var(--accent-blue);
   text-decoration: none;
   transition: color var(--transition);
+  flex-shrink: 0;
 }
 
 .footer a:hover {
   color: var(--accent-purple);
+}
+
+.source-tab-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.source-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.source-url {
+  color: var(--accent-purple);
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Scrollbar */

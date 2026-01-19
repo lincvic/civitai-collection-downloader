@@ -7,6 +7,36 @@
 // Note: Service workers don't support ES modules in all browsers, so we'll use importScripts
 importScripts('utils/api.js', 'utils/download.js');
 
+// Handle extension icon click - open dashboard in new tab
+chrome.action.onClicked.addListener(async (tab) => {
+  // Store the source tab info for the dashboard to use
+  const sourceTabInfo = {
+    tabId: tab.id,
+    url: tab.url
+  };
+  
+  // Save source tab info
+  await chrome.storage.local.set({ sourceTab: sourceTabInfo });
+  
+  // Check if dashboard is already open
+  const dashboardUrl = chrome.runtime.getURL('popup/popup.html');
+  const existingTabs = await chrome.tabs.query({ url: dashboardUrl });
+  
+  if (existingTabs.length > 0) {
+    // Focus existing dashboard tab
+    await chrome.tabs.update(existingTabs[0].id, { active: true });
+    await chrome.windows.update(existingTabs[0].windowId, { focused: true });
+    // Send message to refresh with new source tab
+    chrome.tabs.sendMessage(existingTabs[0].id, { 
+      action: 'sourceTabChanged', 
+      sourceTab: sourceTabInfo 
+    });
+  } else {
+    // Open new dashboard tab
+    chrome.tabs.create({ url: dashboardUrl });
+  }
+});
+
 // State management
 let currentDownload = {
   active: false,
@@ -118,15 +148,62 @@ async function getCollectionInfo(collectionId, tabId) {
 }
 
 /**
- * Ensure content script is injected
+ * Verify tab exists and is on a collection page
+ */
+async function verifySourceTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab) {
+      throw new Error('Tab not found');
+    }
+    if (!tab.url || !tab.url.includes('civitai.com/collections/')) {
+      throw new Error('Tab is not on a Civitai collection page');
+    }
+    return tab;
+  } catch (e) {
+    console.error('Tab verification failed:', e);
+    throw new Error('Source tab is no longer valid. Please click the extension icon again from the collection page.');
+  }
+}
+
+/**
+ * Ensure content script is injected and ready
  */
 async function ensureContentScriptInjected(tabId) {
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-  } catch (e) {
-    // Content script not present, inject it
-    await injectContentScript(tabId);
+  // First verify the tab exists
+  await verifySourceTab(tabId);
+  
+  // Try to ping the content script
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Ping timeout')), 2000);
+        chrome.tabs.sendMessage(tabId, { action: 'ping' }, (response) => {
+          clearTimeout(timeout);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+      
+      if (response?.pong) {
+        console.log('Content script is ready');
+        return true;
+      }
+    } catch (e) {
+      console.log(`Ping attempt ${attempt + 1} failed:`, e.message);
+      
+      // Try to inject content script
+      if (attempt < 2) {
+        await injectContentScript(tabId);
+        await sleep(500);
+      }
+    }
   }
+  
+  throw new Error('Could not connect to content script');
 }
 
 /**
@@ -139,8 +216,10 @@ async function injectContentScript(tabId) {
       files: ['content.js']
     });
     console.log('Content script injected successfully');
+    await sleep(300); // Wait for script to initialize
   } catch (e) {
     console.error('Failed to inject content script:', e);
+    throw e;
   }
 }
 
@@ -152,36 +231,55 @@ function sleep(ms) {
 }
 
 /**
- * Send message to content script with timeout
+ * Send message to content script with timeout and retry
  */
-async function sendToContentScriptWithTimeout(tabId, message, timeout = 5000) {
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new Error('Content script timeout'));
-    }, timeout);
-    
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      clearTimeout(timeoutId);
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+async function sendToContentScriptWithTimeout(tabId, message, timeout = 5000, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Content script timeout'));
+        }, timeout);
+        
+        chrome.tabs.sendMessage(tabId, message, (response) => {
+          clearTimeout(timeoutId);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+      
+      return response;
+    } catch (e) {
+      console.log(`Message attempt ${attempt + 1} failed:`, e.message);
+      if (attempt < retries) {
+        // Re-inject content script and retry
+        try {
+          await injectContentScript(tabId);
+        } catch (injectError) {
+          // Continue to next attempt
+        }
       } else {
-        resolve(response);
+        throw e;
       }
-    });
-  });
+    }
+  }
 }
 
 /**
  * Start the download process
  */
 async function startDownload(options) {
-  const { collectionId, collectionName, downloadMode, folderName } = options;
+  const { collectionId, collectionName, downloadMode, folderName, sourceTabId } = options;
   
   currentDownload = {
     active: true,
     collectionId,
     collectionName,
     folderName,
+    sourceTabId, // Store source tab ID for use in collectImageUrls
     mode: downloadMode,
     progress: {
       total: 0,
@@ -248,34 +346,45 @@ async function collectImageUrls(collectionId, mode) {
   const images = [];
   
   try {
-    // Get the current tab
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
-      throw new Error('No active tab found');
+    // Use stored source tab ID, or fall back to active tab
+    let tabId = currentDownload.sourceTabId;
+    
+    if (!tabId) {
+      // Try to find a tab with the collection page
+      const tabs = await chrome.tabs.query({ url: '*://civitai.com/collections/*' });
+      if (tabs.length > 0) {
+        tabId = tabs[0].id;
+      } else {
+        throw new Error('No collection tab found. Please keep the Civitai collection page open.');
+      }
     }
 
-    console.log('Collecting images from page, mode:', mode);
+    console.log('Collecting images from tab:', tabId, 'mode:', mode);
     
-    // Ensure content script is injected
-    await ensureContentScriptInjected(tab.id);
-    await sleep(300); // Give it time to initialize
+    // Verify tab exists and is on collection page
+    const tab = await verifySourceTab(tabId);
+    console.log('Source tab verified:', tab.url);
+    
+    // Ensure content script is injected and ready
+    await ensureContentScriptInjected(tabId);
 
     // First, scroll to load all content
     let pageData;
     try {
-      pageData = await sendToContentScriptWithTimeout(tab.id, { 
+      console.log('Starting scroll and collect...');
+      pageData = await sendToContentScriptWithTimeout(tabId, { 
         action: 'scrollAndCollect',
         maxScrolls: 30
-      }, 60000); // 60 second timeout for scrolling
+      }, 90000, 1); // 90 second timeout, 1 retry
     } catch (e) {
       console.log('Scroll and collect failed, trying getAllLinks:', e.message);
       try {
-        pageData = await sendToContentScriptWithTimeout(tab.id, { 
+        pageData = await sendToContentScriptWithTimeout(tabId, { 
           action: 'getAllLinks'
-        }, 10000);
+        }, 15000, 2); // 15 second timeout, 2 retries
       } catch (e2) {
         console.log('getAllLinks also failed:', e2.message);
-        pageData = { posts: [], images: [], directImages: [] };
+        throw new Error('Could not communicate with the collection page. Please refresh the page and try again.');
       }
     }
 

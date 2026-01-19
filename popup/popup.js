@@ -1,10 +1,11 @@
 /**
- * Civitai Collection Downloader - Popup Script
+ * Civitai Collection Downloader - Dashboard Script
  */
 
 // State management
 let currentState = 'notOnCollection';
 let collectionData = null;
+let sourceTab = null;
 let downloadProgress = {
   queued: 0,
   downloading: 0,
@@ -59,10 +60,14 @@ const elements = {
   pauseBtn: document.getElementById('pauseBtn'),
   cancelBtn: document.getElementById('cancelBtn'),
   newDownload: document.getElementById('newDownload'),
-  retryBtn: document.getElementById('retryBtn')
+  retryBtn: document.getElementById('retryBtn'),
+  goToSourceTab: document.getElementById('goToSourceTab'),
+  
+  // Source tab
+  sourceTabUrl: document.getElementById('sourceTabUrl')
 };
 
-// Initialize popup
+// Initialize dashboard
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
@@ -71,15 +76,23 @@ async function init() {
     elements.pathPrefix.textContent = downloadsPrefix;
   }
   
-  // Check current tab
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // Get source tab from storage
+  const storage = await chrome.storage.local.get('sourceTab');
+  sourceTab = storage.sourceTab;
   
-  if (tab?.url?.includes('civitai.com/collections/')) {
-    // Extract collection ID from URL
-    const match = tab.url.match(/collections\/(\d+)/);
-    if (match) {
-      const collectionId = match[1];
-      await loadCollectionInfo(collectionId, tab.id);
+  if (sourceTab?.url) {
+    // Update source tab display
+    updateSourceTabDisplay(sourceTab.url);
+    
+    if (sourceTab.url.includes('civitai.com/collections/')) {
+      // Extract collection ID from URL
+      const match = sourceTab.url.match(/collections\/(\d+)/);
+      if (match) {
+        const collectionId = match[1];
+        await loadCollectionInfo(collectionId, sourceTab.tabId);
+      } else {
+        showState('notOnCollection');
+      }
     } else {
       showState('notOnCollection');
     }
@@ -103,12 +116,44 @@ async function init() {
   });
 }
 
+function updateSourceTabDisplay(url) {
+  if (elements.sourceTabUrl) {
+    try {
+      const urlObj = new URL(url);
+      elements.sourceTabUrl.textContent = urlObj.pathname;
+      elements.sourceTabUrl.title = url;
+    } catch {
+      elements.sourceTabUrl.textContent = url;
+    }
+  }
+}
+
 function setupEventListeners() {
   elements.startDownload.addEventListener('click', startDownload);
   elements.pauseBtn.addEventListener('click', togglePause);
   elements.cancelBtn.addEventListener('click', cancelDownload);
   elements.newDownload.addEventListener('click', resetToInfo);
   elements.retryBtn.addEventListener('click', retryLoad);
+  if (elements.goToSourceTab) {
+    elements.goToSourceTab.addEventListener('click', goToSourceTab);
+  }
+}
+
+async function goToSourceTab() {
+  if (sourceTab?.tabId) {
+    try {
+      // Switch to the source tab
+      await chrome.tabs.update(sourceTab.tabId, { active: true });
+      // Focus the window containing the tab
+      const tab = await chrome.tabs.get(sourceTab.tabId);
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
+    } catch (e) {
+      console.error('Could not switch to source tab:', e);
+      showError('Collection tab not found. Please navigate to a Civitai collection and click the extension icon again.');
+    }
+  }
 }
 
 async function loadCollectionInfo(collectionId, tabId) {
@@ -177,7 +222,27 @@ async function loadCollectionInfo(collectionId, tabId) {
 }
 
 async function startDownload() {
-  if (!collectionData) return;
+  if (!collectionData) {
+    showError('No collection data available');
+    return;
+  }
+  
+  if (!sourceTab?.tabId) {
+    showError('Source tab not found. Please click the extension icon again from the collection page.');
+    return;
+  }
+  
+  // Verify source tab is still valid
+  try {
+    const tab = await chrome.tabs.get(sourceTab.tabId);
+    if (!tab || !tab.url?.includes('civitai.com/collections/')) {
+      showError('The collection page has been closed or navigated away. Please click the extension icon again from the collection page.');
+      return;
+    }
+  } catch (e) {
+    showError('The collection page has been closed. Please click the extension icon again from the collection page.');
+    return;
+  }
   
   const downloadMode = document.querySelector('input[name="downloadMode"]:checked').value;
   const folderName = elements.folderName.value.trim() || 'civitai-download';
@@ -196,17 +261,25 @@ async function startDownload() {
   
   // Show collecting status
   elements.progressPercent.textContent = '...';
-  elements.currentFile.textContent = 'Scrolling page to load all media...';
+  elements.currentFile.textContent = 'Scrolling collection page to load all media...';
   updateProgressUI();
   
+  // Switch to source tab briefly to allow content script to work
   try {
-    // Send download request to background
+    await chrome.tabs.update(sourceTab.tabId, { active: true });
+  } catch (e) {
+    console.log('Could not focus source tab:', e);
+  }
+  
+  try {
+    // Send download request to background with source tab info
     chrome.runtime.sendMessage({
       action: 'startDownload',
       collectionId: collectionData.id,
       collectionName: collectionData.name,
       downloadMode: downloadMode,
-      folderName: folderName
+      folderName: folderName,
+      sourceTabId: sourceTab.tabId
     });
   } catch (error) {
     console.error('Error starting download:', error);
@@ -253,7 +326,7 @@ function retryLoad() {
 }
 
 function handleMessage(message) {
-  console.log('[Popup] Received message:', message.action);
+  console.log('[Dashboard] Received message:', message.action);
   
   switch (message.action) {
     case 'progressUpdate':
@@ -267,12 +340,29 @@ function handleMessage(message) {
       break;
       
     case 'downloadError':
-      console.error('[Popup] Download error:', message.error);
+      console.error('[Dashboard] Download error:', message.error);
       showError(message.error);
       break;
       
     case 'currentFile':
       elements.currentFile.textContent = message.filename || '-';
+      break;
+      
+    case 'sourceTabChanged':
+      // Update source tab when user clicks extension icon from a different tab
+      sourceTab = message.sourceTab;
+      if (sourceTab?.url) {
+        updateSourceTabDisplay(sourceTab.url);
+        // Reload collection info
+        if (sourceTab.url.includes('civitai.com/collections/')) {
+          const match = sourceTab.url.match(/collections\/(\d+)/);
+          if (match) {
+            loadCollectionInfo(match[1], sourceTab.tabId);
+          }
+        } else {
+          showState('notOnCollection');
+        }
+      }
       break;
   }
 }
