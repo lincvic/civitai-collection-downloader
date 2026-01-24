@@ -101,6 +101,12 @@ async function handleMessage(request, sender, sendResponse) {
         sendResponse({ acknowledged: true });
         break;
 
+      case 'scrollProgress':
+        // Forward scroll progress to dashboard
+        broadcastCurrentFile(`Scanning collection... ${request.itemCount} items found (scroll ${request.scrollCount})`);
+        sendResponse({ acknowledged: true });
+        break;
+
       default:
         sendResponse({ error: 'Unknown action' });
     }
@@ -318,12 +324,18 @@ async function startDownload(options) {
   });
 
   try {
+    // Notify UI that we're collecting
+    broadcastCurrentFile('Preparing to collect media items...');
+    
     // Collect all image URLs to download
     const imageUrls = await collectImageUrls(collectionId, downloadMode);
     
     if (imageUrls.length === 0) {
       throw new Error('No images found in this collection');
     }
+    
+    // Notify how many items found
+    broadcastCurrentFile(`Found ${imageUrls.length} media files. Starting download...`);
 
     // Add to download queue
     const downloadItems = imageUrls.map((url, index) => ({
@@ -346,10 +358,74 @@ async function startDownload(options) {
 
 /**
  * Collect all image URLs from the collection
- * Note: Civitai doesn't have a public API for collections, so we rely on DOM scraping
+ * Uses CivitAI API first (most reliable), falls back to DOM scraping
+ * API method based on: https://github.com/madlaxcb/CivitAI-Collection-Downloader
  */
 async function collectImageUrls(collectionId, mode) {
   const images = [];
+  let apiSuccess = false;
+  
+  // Try API method first (most reliable for large collections)
+  console.log('[Collector] ========================================');
+  console.log('[Collector] Starting collection with collectionId:', collectionId);
+  console.log('[Collector] Attempting v1 API method first...');
+  broadcastCurrentFile('Fetching collection items via API...');
+  
+  try {
+    // Test the API is working first
+    console.log('[Collector] Making API request...');
+    
+    // Get all collection items via v1 API (works without auth!)
+    const collectionItems = await CivitaiAPI.getCollectionItems(collectionId, {
+      limit: 100,
+      onProgress: (count) => {
+        console.log(`[Collector] API progress: ${count} items`);
+        broadcastCurrentFile(`API: Found ${count} items so far...`);
+      }
+    });
+    
+    console.log('[Collector] API call completed');
+    console.log(`[Collector] API returned ${collectionItems?.length || 0} items`);
+    
+    if (collectionItems && collectionItems.length > 0) {
+      broadcastCurrentFile(`Processing ${collectionItems.length} items from API...`);
+      
+      // tRPC API returns items with URL info
+      for (let i = 0; i < collectionItems.length; i++) {
+        const item = collectionItems[i];
+        
+        const mediaItem = CivitaiAPI.getItemMediaFromTrpc(item);
+        if (mediaItem && mediaItem.url) {
+          images.push({
+            url: mediaItem.url,
+            filename: generateFilename(mediaItem.url, mediaItem.id || i),
+            type: mediaItem.type || 'image'
+          });
+        }
+      }
+      
+      console.log(`[Collector] Collected ${images.length} media items from API`);
+      
+      // If we got items from API, return them (skip DOM scraping)
+      if (images.length > 0) {
+        apiSuccess = true;
+        console.log('[Collector] API SUCCESS - returning items');
+        // Deduplicate and return
+        return deduplicateMedia(images);
+      }
+    } else {
+      console.log('[Collector] API returned empty or null items array');
+    }
+  } catch (apiError) {
+    console.error('[Collector] API method failed:', apiError);
+    console.error('[Collector] Error name:', apiError.name);
+    console.error('[Collector] Error message:', apiError.message);
+    console.error('[Collector] Error stack:', apiError.stack);
+  }
+  
+  // Fallback: DOM scraping method
+  console.log('[Collector] API failed or returned no items, falling back to DOM scraping');
+  broadcastCurrentFile('API returned no items, scrolling page to collect media...');
   
   try {
     // Use stored source tab ID, or fall back to active tab
@@ -365,11 +441,11 @@ async function collectImageUrls(collectionId, mode) {
       }
     }
 
-    console.log('Collecting images from tab:', tabId, 'mode:', mode);
+    console.log('[Collector] Collecting from tab:', tabId, 'mode:', mode);
     
     // Verify tab exists and is on collection page
     const tab = await verifySourceTab(tabId);
-    console.log('Source tab verified:', tab.url);
+    console.log('[Collector] Source tab verified:', tab.url);
     
     // Ensure content script is injected and ready
     await ensureContentScriptInjected(tabId);
@@ -377,24 +453,24 @@ async function collectImageUrls(collectionId, mode) {
     // First, scroll to load all content
     let pageData;
     try {
-      console.log('Starting scroll and collect...');
+      console.log('[Collector] Starting scroll and collect...');
       pageData = await sendToContentScriptWithTimeout(tabId, { 
         action: 'scrollAndCollect',
-        maxScrolls: 30
-      }, 90000, 1); // 90 second timeout, 1 retry
+        maxScrolls: 100 // Increased for large collections
+      }, 300000, 1); // 5 minute timeout for large collections, 1 retry
     } catch (e) {
-      console.log('Scroll and collect failed, trying getAllLinks:', e.message);
+      console.log('[Collector] Scroll and collect failed, trying getAllLinks:', e.message);
       try {
         pageData = await sendToContentScriptWithTimeout(tabId, { 
           action: 'getAllLinks'
-        }, 15000, 2); // 15 second timeout, 2 retries
+        }, 30000, 2); // 30 second timeout, 2 retries
       } catch (e2) {
-        console.log('getAllLinks also failed:', e2.message);
+        console.log('[Collector] getAllLinks also failed:', e2.message);
         throw new Error('Could not communicate with the collection page. Please refresh the page and try again.');
       }
     }
 
-    console.log('Page data collected:', {
+    console.log('[Collector] Page data collected:', {
       posts: pageData?.posts?.length || 0,
       images: pageData?.images?.length || 0,
       directImages: pageData?.directImages?.length || 0,
@@ -403,14 +479,15 @@ async function collectImageUrls(collectionId, mode) {
 
     if (mode === 'posts' && pageData?.posts?.length > 0) {
       // Fetch each post and get its images
-      console.log(`Fetching images from ${pageData.posts.length} posts...`);
+      console.log(`[Collector] Fetching images from ${pageData.posts.length} posts...`);
       
       for (let i = 0; i < pageData.posts.length; i++) {
         const postUrl = pageData.posts[i];
         const postId = CivitaiAPI.extractPostId(postUrl);
         
         if (postId) {
-          console.log(`Fetching post ${i + 1}/${pageData.posts.length}: ${postId}`);
+          console.log(`[Collector] Fetching post ${i + 1}/${pageData.posts.length}: ${postId}`);
+          broadcastCurrentFile(`Fetching post ${i + 1}/${pageData.posts.length}...`);
           const postImages = await getImagesFromPost(postId);
           
           postImages.forEach((img, idx) => {
@@ -426,7 +503,7 @@ async function collectImageUrls(collectionId, mode) {
     
     // Also add direct images from the page
     if (pageData?.directImages?.length > 0) {
-      console.log(`Adding ${pageData.directImages.length} direct images from page`);
+      console.log(`[Collector] Adding ${pageData.directImages.length} direct images from page`);
       pageData.directImages.forEach((url, idx) => {
         images.push({
           url: url,
@@ -437,7 +514,7 @@ async function collectImageUrls(collectionId, mode) {
     
     // Add videos from the page
     if (pageData?.videos?.length > 0) {
-      console.log(`Adding ${pageData.videos.length} videos from page`);
+      console.log(`[Collector] Adding ${pageData.videos.length} videos from page`);
       pageData.videos.forEach((url, idx) => {
         images.push({
           url: url,
@@ -448,7 +525,7 @@ async function collectImageUrls(collectionId, mode) {
     
     // If we have image links but no direct images, fetch image details
     if (images.length === 0 && pageData?.images?.length > 0) {
-      console.log(`Fetching details for ${pageData.images.length} image links`);
+      console.log(`[Collector] Fetching details for ${pageData.images.length} image links`);
       
       for (const imageUrl of pageData.images) {
         const imageId = CivitaiAPI.extractImageId(imageUrl);
@@ -473,9 +550,16 @@ async function collectImageUrls(collectionId, mode) {
     }
 
   } catch (error) {
-    console.error('Error collecting image URLs:', error);
+    console.error('[Collector] Error collecting image URLs:', error);
   }
 
+  return deduplicateMedia(images);
+}
+
+/**
+ * Deduplicate media items by UUID
+ */
+function deduplicateMedia(images) {
   // Helper to extract UUID from civitai URL for deduplication
   function getMediaUuid(url) {
     const match = url.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
@@ -505,7 +589,7 @@ async function collectImageUrls(collectionId, mode) {
     }
   });
 
-  console.log(`Collected ${uniqueUrls.size} unique images`);
+  console.log(`[Collector] Deduplicated to ${uniqueUrls.size} unique items`);
   return Array.from(uniqueUrls.values());
 }
 

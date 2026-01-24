@@ -334,74 +334,145 @@
   }
 
   // Scroll to load more content (for infinite scroll pages)
-  async function scrollToLoadMore(maxScrolls = 50) {
+  async function scrollToLoadMore(maxScrolls = 100) {
     console.log('[Civitai Downloader] Starting scroll to load all content...');
     
     let scrollCount = 0;
     let lastItemCount = 0;
     let noNewContentCount = 0;
+    const maxNoNewContent = 5; // Allow more attempts before giving up
     
-    // Get initial count
+    // Get initial count - multiple strategies
     const getItemsCount = () => {
-      const images = document.querySelectorAll('img[src*="civitai"]').length;
-      const links = document.querySelectorAll('a[href*="/images/"], a[href*="/posts/"]').length;
-      return Math.max(images, links);
+      const images = document.querySelectorAll('img[src*="civitai"], img[src*="image.civitai"]').length;
+      const videos = document.querySelectorAll('video').length;
+      const imageLinks = document.querySelectorAll('a[href*="/images/"]').length;
+      const postLinks = document.querySelectorAll('a[href*="/posts/"]').length;
+      // Count unique media items (prefer links over raw elements)
+      return Math.max(imageLinks + postLinks, images + videos);
     };
+    
+    // Check if page is still loading
+    const isLoading = () => {
+      // Look for loading indicators
+      const loadingIndicators = document.querySelectorAll(
+        '[class*="loading"], [class*="Loading"], [class*="spinner"], [class*="Spinner"], ' +
+        '[class*="skeleton"], [class*="Skeleton"], [aria-busy="true"]'
+      );
+      return loadingIndicators.length > 0;
+    };
+    
+    // Wait for any loading to finish
+    const waitForLoading = async (maxWait = 5000) => {
+      const start = Date.now();
+      while (isLoading() && Date.now() - start < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    };
+    
+    // Wait for initial page load
+    await waitForLoading();
     
     lastItemCount = getItemsCount();
     console.log('[Civitai Downloader] Initial items:', lastItemCount);
     
-    while (scrollCount < maxScrolls && noNewContentCount < 3) {
-      // Scroll down
+    while (scrollCount < maxScrolls && noNewContentCount < maxNoNewContent) {
+      // Scroll down in chunks for better loading
+      const viewportHeight = window.innerHeight;
+      const scrollStep = viewportHeight * 2;
+      
+      // Scroll progressively
+      for (let i = 0; i < 3; i++) {
+        window.scrollBy({
+          top: scrollStep,
+          behavior: 'smooth'
+        });
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      
+      // Then scroll to absolute bottom
       window.scrollTo({
         top: document.body.scrollHeight,
         behavior: 'smooth'
       });
       
-      // Wait for content to load
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Wait for content to load (longer wait time)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Wait for any loading indicators to finish
+      await waitForLoading(3000);
       
       // Also try clicking "Load More" button if present
       try {
         // Find load more button using valid CSS selectors
-        let loadMoreBtn = document.querySelector('button[class*="load"], button[class*="Load"], [class*="LoadMore"], [class*="loadMore"]');
+        let loadMoreBtn = document.querySelector(
+          'button[class*="load"], button[class*="Load"], [class*="LoadMore"], [class*="loadMore"], ' +
+          '[class*="show-more"], [class*="ShowMore"]'
+        );
         
         // If not found, try finding by text content
         if (!loadMoreBtn) {
-          const buttons = document.querySelectorAll('button');
+          const buttons = document.querySelectorAll('button, a.button, [role="button"]');
           for (const btn of buttons) {
-            if (btn.textContent.toLowerCase().includes('load more') || 
-                btn.textContent.toLowerCase().includes('show more')) {
+            const text = btn.textContent.toLowerCase();
+            if (text.includes('load more') || text.includes('show more') || 
+                text.includes('see more') || text.includes('view more')) {
               loadMoreBtn = btn;
               break;
             }
           }
         }
         
-        if (loadMoreBtn) {
+        if (loadMoreBtn && loadMoreBtn.offsetParent !== null) { // Check if visible
+          console.log('[Civitai Downloader] Clicking load more button');
           loadMoreBtn.click();
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await waitForLoading(3000);
         }
       } catch (e) {
         // Ignore click errors
-        console.log('[Civitai Downloader] No load more button found or click failed');
       }
       
       // Check if new items loaded
       const currentCount = getItemsCount();
-      console.log('[Civitai Downloader] Scroll', scrollCount + 1, '- Items:', currentCount);
+      console.log('[Civitai Downloader] Scroll', scrollCount + 1, '- Items:', currentCount, 
+                  noNewContentCount > 0 ? `(no change x${noNewContentCount})` : '');
       
       if (currentCount === lastItemCount) {
         noNewContentCount++;
+        
+        // On consecutive no-change, try scrolling up then down to trigger lazy load
+        if (noNewContentCount >= 2) {
+          window.scrollTo(0, document.body.scrollHeight / 2);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          window.scrollTo(0, document.body.scrollHeight);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
       } else {
         noNewContentCount = 0;
         lastItemCount = currentCount;
       }
       
       scrollCount++;
+      
+      // Report progress every 5 scrolls
+      if (scrollCount % 5 === 0) {
+        try {
+          chrome.runtime.sendMessage({
+            action: 'scrollProgress',
+            scrollCount: scrollCount,
+            itemCount: lastItemCount
+          });
+        } catch (e) {
+          // Ignore messaging errors
+        }
+      }
     }
     
-    console.log('[Civitai Downloader] Finished scrolling. Total items found:', lastItemCount);
+    console.log('[Civitai Downloader] Finished scrolling after', scrollCount, 'scrolls. Total items found:', lastItemCount);
+    
+    // Final wait for any remaining lazy loads
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Scroll back to top
     window.scrollTo(0, 0);

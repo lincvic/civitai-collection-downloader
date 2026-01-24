@@ -51,6 +51,11 @@ const elements = {
   // Options
   skipExisting: document.getElementById('skipExisting'),
   
+  // API Key
+  apiKeyInput: document.getElementById('apiKeyInput'),
+  saveApiKey: document.getElementById('saveApiKey'),
+  apiKeyStatus: document.getElementById('apiKeyStatus'),
+  
   // Completed
   totalDownloaded: document.getElementById('totalDownloaded'),
   savedFolder: document.getElementById('savedFolder'),
@@ -80,6 +85,9 @@ async function init() {
   if (elements.pathPrefix) {
     elements.pathPrefix.textContent = downloadsPrefix;
   }
+  
+  // Load API key status
+  await loadApiKeyStatus();
   
   // Get source tab from storage
   const storage = await chrome.storage.local.get('sourceTab');
@@ -141,6 +149,57 @@ function setupEventListeners() {
   elements.retryBtn.addEventListener('click', retryLoad);
   if (elements.goToSourceTab) {
     elements.goToSourceTab.addEventListener('click', goToSourceTab);
+  }
+  if (elements.saveApiKey) {
+    elements.saveApiKey.addEventListener('click', saveApiKey);
+  }
+}
+
+// API Key functions
+async function loadApiKeyStatus() {
+  try {
+    const result = await chrome.storage.local.get('civitaiApiKey');
+    const hasKey = !!result.civitaiApiKey;
+    
+    if (elements.apiKeyStatus) {
+      elements.apiKeyStatus.textContent = hasKey ? '✓ Set' : 'Not set';
+      elements.apiKeyStatus.classList.toggle('set', hasKey);
+    }
+    
+    if (elements.apiKeyInput && result.civitaiApiKey) {
+      // Show masked version
+      elements.apiKeyInput.value = result.civitaiApiKey;
+    }
+  } catch (e) {
+    console.error('Error loading API key status:', e);
+  }
+}
+
+async function saveApiKey() {
+  const apiKey = elements.apiKeyInput?.value?.trim();
+  
+  try {
+    if (apiKey) {
+      await chrome.storage.local.set({ civitaiApiKey: apiKey });
+      elements.apiKeyStatus.textContent = '✓ Saved!';
+      elements.apiKeyStatus.classList.add('set');
+      
+      // Reset text after a moment
+      setTimeout(() => {
+        elements.apiKeyStatus.textContent = '✓ Set';
+      }, 2000);
+    } else {
+      await chrome.storage.local.remove('civitaiApiKey');
+      elements.apiKeyStatus.textContent = 'Cleared';
+      elements.apiKeyStatus.classList.remove('set');
+      
+      setTimeout(() => {
+        elements.apiKeyStatus.textContent = 'Not set';
+      }, 2000);
+    }
+  } catch (e) {
+    console.error('Error saving API key:', e);
+    elements.apiKeyStatus.textContent = 'Error!';
   }
 }
 
