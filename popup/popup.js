@@ -19,7 +19,6 @@ let downloadProgress = {
 // Detect OS
 const isWindows = navigator.platform.indexOf('Win') > -1;
 const pathSeparator = isWindows ? '\\' : '/';
-const downloadsPrefix = isWindows ? 'Downloads\\Civitai\\' : 'Downloads/Civitai/';
 
 // DOM Elements
 const elements = {
@@ -35,8 +34,7 @@ const elements = {
   collectionName: document.getElementById('collectionName'),
   itemCount: document.getElementById('itemCount'),
   itemType: document.getElementById('itemType'),
-  folderName: document.getElementById('folderName'),
-  pathPrefix: document.getElementById('pathPrefix'),
+  downloadPath: document.getElementById('downloadPath'),
   
   // Progress
   progressPercent: document.getElementById('progressPercent'),
@@ -81,9 +79,10 @@ const elements = {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  // Set OS-appropriate path prefix
-  if (elements.pathPrefix) {
-    elements.pathPrefix.textContent = downloadsPrefix;
+  // Load saved download path from storage
+  const stored = await chrome.storage.local.get('downloadPath');
+  if (stored.downloadPath && elements.downloadPath) {
+    elements.downloadPath.value = stored.downloadPath;
   }
   
   // Load API key status
@@ -260,13 +259,15 @@ async function loadCollectionInfo(collectionId, tabId) {
     elements.itemCount.textContent = count > 0 ? `${count}+` : '?';
     elements.itemType.textContent = collectionData.type || 'Mixed';
     
-    // Set default folder name
-    const safeName = (collectionData.name || `collection-${collectionId}`)
-      .replace(/[^a-zA-Z0-9-_\s]/g, '')
-      .replace(/\s+/g, '-')
-      .toLowerCase()
-      .slice(0, 50);
-    elements.folderName.value = safeName || `collection-${collectionId}`;
+    // Set default download path if not already set
+    if (!elements.downloadPath.value) {
+      const safeName = (collectionData.name || `collection-${collectionId}`)
+        .replace(/[^a-zA-Z0-9-_\s]/g, '')
+        .replace(/\s+/g, '-')
+        .toLowerCase()
+        .slice(0, 50);
+      elements.downloadPath.value = `Civitai${pathSeparator}${safeName || `collection-${collectionId}`}`;
+    }
     
   } catch (error) {
     console.error('Error loading collection:', error);
@@ -281,7 +282,9 @@ async function loadCollectionInfo(collectionId, tabId) {
     elements.collectionName.classList.remove('loading');
     elements.itemCount.textContent = '?';
     elements.itemType.textContent = 'Unknown';
-    elements.folderName.value = `collection-${collectionId}`;
+    if (!elements.downloadPath.value) {
+      elements.downloadPath.value = `Civitai${pathSeparator}collection-${collectionId}`;
+    }
   }
 }
 
@@ -309,8 +312,11 @@ async function startDownload() {
   }
   
   const downloadMode = document.querySelector('input[name="downloadMode"]:checked').value;
-  const folderName = elements.folderName.value.trim() || 'civitai-download';
+  const downloadPath = elements.downloadPath.value.trim() || 'Civitai/download';
   const skipExisting = elements.skipExisting?.checked ?? true;
+  
+  // Save the download path for future use
+  await chrome.storage.local.set({ downloadPath: downloadPath });
   
   // Reset progress
   downloadProgress = {
@@ -344,7 +350,7 @@ async function startDownload() {
       collectionId: collectionData.id,
       collectionName: collectionData.name,
       downloadMode: downloadMode,
-      folderName: folderName,
+      downloadPath: downloadPath,
       skipExisting: skipExisting,
       sourceTabId: sourceTab.tabId
     });
@@ -454,9 +460,10 @@ function showCompleted() {
   showState('completedState');
   
   elements.totalDownloaded.textContent = downloadProgress.completed;
+  const downloadPath = elements.downloadPath.value || 'Civitai/download';
   const folderPath = isWindows 
-    ? `Downloads\\Civitai\\${elements.folderName.value}\\`
-    : `Downloads/Civitai/${elements.folderName.value}/`;
+    ? `Downloads\\${downloadPath.replace(/\//g, '\\')}\\`
+    : `Downloads/${downloadPath.replace(/\\/g, '/')}/`;
   elements.savedFolder.textContent = folderPath;
   
   if (downloadProgress.failedItems && downloadProgress.failedItems.length > 0) {

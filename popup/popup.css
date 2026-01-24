@@ -399,6 +399,41 @@ body::before {
   color: var(--text-muted);
 }
 
+/* Path Input */
+.path-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.path-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: 'SF Mono', Monaco, monospace;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.path-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.path-input::placeholder {
+  color: var(--text-muted);
+}
+
+.path-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 4px;
+}
+
 /* Source Tab Hint */
 .source-tab-hint {
   display: flex;

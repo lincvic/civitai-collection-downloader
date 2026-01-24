@@ -278,13 +278,13 @@ async function sendToContentScriptWithTimeout(tabId, message, timeout = 5000, re
  * Start the download process
  */
 async function startDownload(options) {
-  const { collectionId, collectionName, downloadMode, folderName, sourceTabId, skipExisting } = options;
+  const { collectionId, collectionName, downloadMode, downloadPath, sourceTabId, skipExisting } = options;
   
   currentDownload = {
     active: true,
     collectionId,
     collectionName,
-    folderName,
+    downloadPath,
     sourceTabId, // Store source tab ID for use in collectImageUrls
     mode: downloadMode,
     skipExisting: skipExisting !== false, // Default to true
@@ -299,9 +299,9 @@ async function startDownload(options) {
     }
   };
 
-  // Initialize download manager
+  // Initialize download manager with custom path
   downloadManager.init({
-    basePath: `Civitai/${folderName}`,
+    basePath: downloadPath || 'Civitai/download',
     skipExisting: skipExisting !== false,
     onProgress: (progress) => {
       currentDownload.progress = progress;

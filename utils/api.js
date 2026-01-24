@@ -136,13 +136,10 @@ const CivitaiAPI = {
 
   /**
    * Get all items in a collection using the tRPC API
+   * Tries image.getInfinite first, then post.getInfinite for post collections
    * Based on: https://github.com/madlaxcb/CivitAI-Collection-Downloader
    */
   async getCollectionItems(collectionId, options = {}) {
-    const items = [];
-    let cursor = null;
-    const maxItems = options.maxItems || 10000; // Safety limit
-    
     console.log(`[CivitaiAPI] Fetching collection ${collectionId} items via tRPC API...`);
     
     // Load API key if available (required for private/NSFW collections)
@@ -150,67 +147,150 @@ const CivitaiAPI = {
       await this.loadApiKey();
     }
     
+    // First try image.getInfinite (for image collections)
+    let items = await this.fetchImagesFromCollection(collectionId, options);
+    
+    // If no images found, try post.getInfinite (for post collections)
+    if (items.length === 0) {
+      console.log('[CivitaiAPI] No images found, trying post.getInfinite for post collection...');
+      items = await this.fetchPostsFromCollection(collectionId, options);
+    }
+    
+    console.log(`[CivitaiAPI] Total items fetched: ${items.length}`);
+    return items;
+  },
+
+  /**
+   * Fetch images directly from a collection using image.getInfinite
+   */
+  async fetchImagesFromCollection(collectionId, options = {}) {
+    const items = [];
+    let cursor = null;
+    const maxItems = options.maxItems || 10000;
     let page = 1;
+    
     while (items.length < maxItems) {
-      // Build the tRPC request data - matching the Python tool's format
       const requestData = {
         json: {
           collectionId: parseInt(collectionId),
           period: "AllTime",
           sort: "Newest",
-          browsingLevel: 31, // 1(PG) + 2(PG-13) + 4(R) + 8(X) + 16(XXX)
+          browsingLevel: 31,
           include: ["cosmetics"],
           cursor: cursor,
           authed: true
         }
       };
       
-      // Add meta field only for the first request (when cursor is null)
       if (cursor === null) {
         requestData.meta = { values: { cursor: ["undefined"] } };
       }
       
-      // Encode the input parameter
       const encodedInput = encodeURIComponent(JSON.stringify(requestData));
       const url = `${this.API_URL}/trpc/image.getInfinite?input=${encodedInput}`;
       
-      console.log(`[CivitaiAPI] Fetching page ${page}, current items: ${items.length}`);
+      console.log(`[CivitaiAPI] Fetching images page ${page}, current: ${items.length}`);
       
-      const data = await this.fetch(url, { timeout: 30000 });
-      
-      // tRPC returns data in result.data.json format
-      const result = data?.result?.data?.json;
-      
-      if (!result || !result.items || result.items.length === 0) {
-        console.log('[CivitaiAPI] No more items found');
+      try {
+        const data = await this.fetch(url, { timeout: 30000 });
+        const result = data?.result?.data?.json;
+        
+        if (!result || !result.items || result.items.length === 0) {
+          break;
+        }
+        
+        items.push(...result.items);
+        
+        if (options.onProgress) {
+          options.onProgress(items.length);
+        }
+        
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        
+        page++;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (e) {
+        console.error('[CivitaiAPI] Error fetching images:', e.message);
         break;
       }
-      
-      // Add items to our collection
-      items.push(...result.items);
-      
-      console.log(`[CivitaiAPI] Got ${result.items.length} items, total: ${items.length}`);
-      
-      // Check for next page cursor
-      cursor = result.nextCursor;
-      if (!cursor) {
-        console.log('[CivitaiAPI] No next cursor, finished');
-        break;
-      }
-      
-      // Progress callback
-      if (options.onProgress) {
-        options.onProgress(items.length);
-      }
-      
-      page++;
-      
-      // Small delay between requests to be nice to the API
-      await new Promise(resolve => setTimeout(resolve, 300));
     }
     
-    console.log(`[CivitaiAPI] Total items fetched: ${items.length}`);
     return items;
+  },
+
+  /**
+   * Fetch posts from a collection and extract all images from each post
+   */
+  async fetchPostsFromCollection(collectionId, options = {}) {
+    const allImages = [];
+    let cursor = null;
+    const maxItems = options.maxItems || 10000;
+    let page = 1;
+    
+    while (allImages.length < maxItems) {
+      const requestData = {
+        json: {
+          collectionId: parseInt(collectionId),
+          period: "AllTime",
+          sort: "Newest",
+          browsingLevel: 31,
+          cursor: cursor,
+          authed: true
+        }
+      };
+      
+      if (cursor === null) {
+        requestData.meta = { values: { cursor: ["undefined"] } };
+      }
+      
+      const encodedInput = encodeURIComponent(JSON.stringify(requestData));
+      const url = `${this.API_URL}/trpc/post.getInfinite?input=${encodedInput}`;
+      
+      console.log(`[CivitaiAPI] Fetching posts page ${page}, current images: ${allImages.length}`);
+      
+      try {
+        const data = await this.fetch(url, { timeout: 30000 });
+        const result = data?.result?.data?.json;
+        
+        if (!result || !result.items || result.items.length === 0) {
+          break;
+        }
+        
+        // Extract ALL images from each post
+        for (const post of result.items) {
+          const postId = post.id;
+          const postImages = post.images || [];
+          
+          console.log(`[CivitaiAPI] Post ${postId} has ${postImages.length} images`);
+          
+          for (const img of postImages) {
+            // Add post info to each image for organization
+            allImages.push({
+              ...img,
+              postId: postId,
+              postTitle: post.title
+            });
+          }
+        }
+        
+        if (options.onProgress) {
+          options.onProgress(allImages.length);
+        }
+        
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        
+        page++;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (e) {
+        console.error('[CivitaiAPI] Error fetching posts:', e.message);
+        break;
+      }
+    }
+    
+    console.log(`[CivitaiAPI] Extracted ${allImages.length} images from posts`);
+    return allImages;
   },
 
   /**
